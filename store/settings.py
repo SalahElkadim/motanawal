@@ -188,7 +188,7 @@ SIMPLE_JWT = {
 # Development & Production
 CORS_ALLOWED_ORIGINS = os.getenv(
     'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,https://motanawalstore-production.up.railway.app/,https://www.motanawalstore-production.up.railway.app/,https://motanawaldashboard-production.up.railway.app/'
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,https://motanawalstore-production.up.railway.app/,https://www.motanawalstore-production.up.railway.app/,https://motanawaldashboard-production.up.railway.app/,https://www.motanawal.com/'
 ).split(',')
 
 CORS_ALLOW_CREDENTIALS = False
