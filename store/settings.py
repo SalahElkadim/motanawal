@@ -260,7 +260,7 @@ WSGI_APPLICATION = 'store.wsgi.application'
 
 DATABASES = {
     "default": dj_database_url.parse(
-        "postgresql://postgres:MGDTMrfSHWndMvmFuyLWACqpfQxQMFvF@shortline.proxy.rlwy.net:20389/railway",
+        "postgresql://postgres:BCVFSAlatuFNXJuUFQtiAsVVrWAAomam@thomas.proxy.rlwy.net:41304/railway",
         conn_max_age=600
     )
 }
