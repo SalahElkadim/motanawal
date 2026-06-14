@@ -214,7 +214,7 @@ ONESIGNAL_APP_ID  = os.getenv('ONESIGNAL_APP_ID')
 ONESIGNAL_API_KEY = os.getenv('ONESIGNAL_API_KEY')   
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://onlinestore-production-d7b2.up.railway.app"
+    "https://motanawal-production.up.railway.app"
 ]
 # ============================================================
 # CACHING
