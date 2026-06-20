@@ -20,7 +20,7 @@ from .views import (
     ProductVariantListView, ProductVariantDetailView, UpdateVariantStockView,
     AttributeListView, AttributeDetailView,
     AttributeValueListView, AttributeValueDetailView,
-    GenerateVariantsView,
+    GenerateVariantsView,ProductPriceTierView,
 
     # Orders
     OrderListView, OrderDetailView, UpdateOrderStatusView,
@@ -87,8 +87,7 @@ urlpatterns = [
     # ──────────────────────────────────────────────────────────
     path('products/',         ProductListView.as_view(),   name='product_list'),
     path('products/<int:pk>/', ProductDetailView.as_view(), name='product_detail'),
-    path('products/<int:pk>/images/<int:image_pk>/',
-         ProductImageView.as_view(), name='product_image'),
+    path('products/<int:pk>/images/<int:image_pk>/',ProductImageView.as_view(),name='product-image-detail'),
 
     path('products/<int:pk>/generate-variants/',
          GenerateVariantsView.as_view(), name='generate_variants'),
@@ -167,4 +166,9 @@ urlpatterns = [
     path('shipping-rates/',         ShippingRateListView.as_view(),   name='shipping_rate_list'),
     path('shipping-rates/bulk/',    BulkShippingRateView.as_view(),   name='shipping_rate_bulk'),
     path('shipping-rates/<int:pk>/', ShippingRateDetailView.as_view(), name='shipping_rate_detail'),
+
+    path('products/<int:pk>/price-tiers/', ProductPriceTierView.as_view(), name='product-price-tiers'),
+    
+
+
 ]

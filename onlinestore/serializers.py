@@ -197,6 +197,7 @@ class StoreProductDetailSerializer(serializers.ModelSerializer):
     variants            = StoreProductVariantSerializer(many=True, read_only=True)
     category_name       = serializers.CharField(source='category.name', read_only=True)
     discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=1, read_only=True)
+    price_tiers = serializers.SerializerMethodField()
     effective_price     = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     avg_rating          = serializers.SerializerMethodField()
     reviews_count       = serializers.SerializerMethodField()
@@ -211,7 +212,7 @@ class StoreProductDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'slug', 'description',
             'price', 'discount_price', 'discount_percentage', 'effective_price',
             'category', 'category_name',
-            'images', 'variants',
+            'images', 'variants','price_tiers',
             'is_in_stock', 'total_stock',
             'avg_rating', 'reviews_count', 'reviews',
             'created_at',
@@ -224,7 +225,9 @@ class StoreProductDetailSerializer(serializers.ModelSerializer):
         avg = result['avg']
         return round(avg, 1) if avg else None
     
-    
+    def get_price_tiers(self, obj):
+        from dashboard.serializers import ProductPriceTierSerializer
+        return ProductPriceTierSerializer(obj.price_tiers.all(), many=True).data
     
     def get_available_attributes(self, obj):
         result = {}
@@ -259,7 +262,7 @@ class StoreProductDetailSerializer(serializers.ModelSerializer):
 class CartItemSerializer(serializers.ModelSerializer):
     product_name    = serializers.CharField(source='product.name', read_only=True)
     variant_label   = serializers.SerializerMethodField()
-    variant_image   = serializers.SerializerMethodField()  # ✅ جديد
+    variant_image   = serializers.SerializerMethodField()
     unit_price      = serializers.SerializerMethodField()
     subtotal        = serializers.SerializerMethodField()
     primary_image   = serializers.SerializerMethodField()
@@ -270,17 +273,31 @@ class CartItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name',
             'variant', 'variant_label',
-            'quantity',   'variant_image',   # ✅ جديد
+            'quantity', 'variant_image',
             'unit_price', 'subtotal',
             'primary_image', 'is_out_of_stock',
         ]
 
+    def _total_qty_for_product(self, obj):
+        # لو الـ context فيه الإجمالي المحضّر مسبقًا (الحالة العادية من CartSerializer)
+        product_quantities = self.context.get('product_quantities')
+        if product_quantities is not None:
+            return product_quantities.get(obj.product_id, obj.quantity)
+        # fallback لو الـ serializer استخدم لوحده من غير context
+        from django.db.models import Sum
+        return obj.cart.items.filter(product_id=obj.product_id).aggregate(
+            total=Sum('quantity')
+        )['total'] or obj.quantity
+
     def get_unit_price(self, obj):
-        price = obj.variant.effective_price if obj.variant else obj.product.effective_price
+        from dashboard.utils import get_price_for_quantity
+        total_qty = self._total_qty_for_product(obj)
+        price = get_price_for_quantity(obj.product, total_qty)
         return str(price)
 
     def get_subtotal(self, obj):
-        price = obj.variant.effective_price if obj.variant else obj.product.effective_price
+        from decimal import Decimal
+        price = Decimal(self.get_unit_price(obj))
         return str(price * obj.quantity)
 
     def get_variant_label(self, obj):
@@ -298,27 +315,19 @@ class CartItemSerializer(serializers.ModelSerializer):
         if obj.variant:
             return obj.variant.is_out_of_stock
         return not obj.product.is_in_stock
-    
+
     def get_variant_image(self, obj):
-            """
-            بنجيب الصورة المرتبطة بأي attribute_value من الـ variant
-            """
-            if not obj.variant:
-                return None
+        if not obj.variant:
+            return None
+        av_ids = obj.variant.attribute_values.values_list('id', flat=True)
+        img = obj.product.images.filter(attribute_value__in=av_ids).first()
+        if not img:
+            return None
+        return img.image.build_url() if hasattr(img.image, 'build_url') else img.image.url
 
-            # جيب كل الـ attribute_value ids بتاعت الـ variant
-            av_ids = obj.variant.attribute_values.values_list('id', flat=True)
-
-            # دور على صورة عندها attribute_value من دول
-            img = obj.product.images.filter(attribute_value__in=av_ids).first()
-
-            if not img:
-                return None
-
-            return img.image.build_url() if hasattr(img.image, 'build_url') else img.image.url
 
 class CartSerializer(serializers.ModelSerializer):
-    items       = CartItemSerializer(many=True, read_only=True)
+    items       = serializers.SerializerMethodField()
     subtotal    = serializers.SerializerMethodField()
     total_items = serializers.SerializerMethodField()
 
@@ -326,11 +335,31 @@ class CartSerializer(serializers.ModelSerializer):
         model  = Cart
         fields = ['id', 'items', 'total_items', 'subtotal', 'updated_at']
 
+    def _product_quantities(self, obj):
+        totals = {}
+        for item in obj.items.all():
+            totals[item.product_id] = totals.get(item.product_id, 0) + item.quantity
+        return totals
+
+    def get_items(self, obj):
+        items = list(obj.items.all())
+        product_quantities = self._product_quantities(obj)
+        return CartItemSerializer(
+            items, many=True, context={'product_quantities': product_quantities}
+        ).data
+
     def get_subtotal(self, obj):
-        total = sum(
-            (item.variant.effective_price if item.variant else item.product.effective_price) * item.quantity
-            for item in obj.items.all()
-        )
+        from dashboard.utils import get_price_for_quantity
+        from decimal import Decimal
+        product_quantities = self._product_quantities(obj)
+        price_cache = {}
+        total = Decimal('0')
+        for item in obj.items.all():
+            if item.product_id not in price_cache:
+                price_cache[item.product_id] = get_price_for_quantity(
+                    item.product, product_quantities[item.product_id]
+                )
+            total += price_cache[item.product_id] * item.quantity
         return str(total)
 
     def get_total_items(self, obj):
@@ -443,7 +472,7 @@ class StoreOrderDetailSerializer(serializers.ModelSerializer):
             'payment_method', 'payment_status', 'payment_status_display',
             'shipping_name', 'shipping_phone', 'shipping_address',
             'shipping_city', 'shipping_country', 'shipping_postal_code',
-            'notes', 'items','whatsapp_number',
+            'notes', 'items','whatsapp_number','shipping_district',
             'can_cancel', 'cancellation', 'guest_info',
             'created_at', 'updated_at',
         ]
@@ -532,6 +561,7 @@ class CheckoutSerializer(serializers.Serializer):
     shipping_address     = serializers.CharField(max_length=500)
     shipping_city        = serializers.CharField(max_length=100)
     shipping_country     = serializers.CharField(max_length=100)
+    shipping_district    = serializers.CharField(max_length=100, required=False, allow_blank=True)
     shipping_postal_code = serializers.CharField(max_length=20, required=False, allow_blank=True)
     notes                = serializers.CharField(required=False, allow_blank=True)
     shipping_cost        = serializers.DecimalField(
@@ -572,18 +602,18 @@ class CheckoutSerializer(serializers.Serializer):
     def create(self, validated_data):
         from .models import PaymentProcessorFactory, GuestOrder
         from dashboard.models import Order, OrderItem, Payment
+        from dashboard.utils import get_prices_for_items
 
         request    = self.context.get('request')
         items_data = validated_data['items']
         coupon     = validated_data.get('coupon_code')
 
-        # ── حساب الـ Pricing ──────────────────────────────────
+        # ✅ السعر بناءً على إجمالي كمية المنتج عبر كل الـ variants
+        item_prices = get_prices_for_items(items_data)
+
         subtotal = Decimal('0')
         for item in items_data:
-            variant = item.get('variant')
-            product = item['product']
-            price   = variant.effective_price if variant else product.effective_price
-            subtotal += price * item['quantity']
+            subtotal += item_prices[item['product'].id] * item['quantity']
 
         discount_amount = coupon.calculate_discount(subtotal) if coupon else Decimal('0')
         shipping_cost   = validated_data.get('shipping_cost', Decimal('0'))
@@ -594,15 +624,11 @@ class CheckoutSerializer(serializers.Serializer):
                 f"الحد الأدنى للطلب لاستخدام هذا الكوبون هو {coupon.min_order_value}."
             )
 
-        # ── إنشاء الأوردر ─────────────────────────────────────
         user = request.user if (request and request.user.is_authenticated) else None
 
         order = Order.objects.create(
-            user=user,
-            coupon=coupon,
-            subtotal=subtotal,
-            discount_amount=discount_amount,
-            shipping_cost=shipping_cost,
+            user=user, coupon=coupon, subtotal=subtotal,
+            discount_amount=discount_amount, shipping_cost=shipping_cost,
             total_price=total_price,
             payment_method=validated_data['payment_method'],
             shipping_name=validated_data['shipping_name'],
@@ -610,57 +636,40 @@ class CheckoutSerializer(serializers.Serializer):
             whatsapp_number=validated_data.get('whatsapp_number', ''),
             shipping_address=validated_data['shipping_address'],
             shipping_city=validated_data['shipping_city'],
+            shipping_district=validated_data.get('shipping_district', ''),
             shipping_country=validated_data['shipping_country'],
             shipping_postal_code=validated_data.get('shipping_postal_code', ''),
             notes=validated_data.get('notes', ''),
         )
 
-        # ── Guest Info ─────────────────────────────────────────
         if not user:
             GuestOrder.objects.create(
-                order=order,
-                name=validated_data['shipping_name'],
+                order=order, name=validated_data['shipping_name'],
                 email=validated_data.get('guest_email', ''),
                 phone=validated_data['shipping_phone'],
             )
 
-        # ── Order Items ────────────────────────────────────────
         for item in items_data:
             variant = item.get('variant')
             product = item['product']
-            price   = variant.effective_price if variant else product.effective_price
+            price   = item_prices[product.id]
 
             OrderItem.objects.create(
-                order=order,
-                product=product,
-                variant=variant,
+                order=order, product=product, variant=variant,
                 product_name=product.name,
                 variant_name=str(variant) if variant else '',
                 unit_price=price,
                 quantity=item['quantity'],
             )
 
-            # ✅ لا يوجد خصم من المخزون هنا
-            # الخصم بيحصل من WarehouseStock عند تحويل الأوردر لـ confirmed
-            # في dashboard/signals.py → deduct_warehouse_stock_on_confirm
-
-        # ── Payment Processor ──────────────────────────────────
         processor      = PaymentProcessorFactory.get(validated_data['payment_method'])
         payment_result = processor.initiate(order)
+        Payment.objects.create(order=order, amount=total_price, method=validated_data['payment_method'], status='pending')
 
-        Payment.objects.create(
-            order=order,
-            amount=total_price,
-            method=validated_data['payment_method'],
-            status='pending',
-        )
-
-        # ── Coupon Usage ───────────────────────────────────────
         if coupon:
             coupon.used_count += 1
             coupon.save()
 
-        # ── Clear Cart ─────────────────────────────────────────
         if user:
             Cart.objects.filter(user=user).delete()
         elif request:
